@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcpchat"
+version = "0.1.0"
+description = "Chat with an LLM that works through the tools of MCP servers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+keyring = ["keyring"]
+dev = ["pytest"]
+
+[project.scripts]
+mcpchat = "mcpchat.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mcpchat*"]
