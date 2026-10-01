@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Like zen_platform: no runtime DLL next to the executable.
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_compile_options(/utf-8)
 endif()
 
 option(MCPCHAT_BUILD_GUI "Build the window (zen_platform + iGUI)" ON)
@@ -67,6 +68,10 @@ if(MCPCHAT_BUILD_GUI)
     target_link_libraries(mcpchat PRIVATE mcpchat_core platform igui::igui igui::font)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(mcpchat PRIVATE -Wall -Wextra)
+    endif()
+    if(MSVC)
+        # A window program that still starts at main().
+        target_link_options(mcpchat PRIVATE /ENTRY:mainCRTStartup)
     endif()
     install(TARGETS mcpchat RUNTIME DESTINATION .)
 endif()

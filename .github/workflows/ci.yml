@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Publish a release with this tag (for example v0.2.0-rc1). Leave empty for a plain CI run."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxrandr-dev libgl-dev libcurl4-openssl-dev
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Test with sanitizers
+        run: |
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DMCPCHAT_BUILD_GUI=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          cmake --build build-asan -j
+          ctest --test-dir build-asan --output-on-failure
+
+      - name: Package
+        run: |
+          mkdir -p stage
+          cp build/mcpchat README.md stage/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpchat-linux-x64
+          path: stage
+
+  e2e:
+    name: End to end with CocoShape
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: akadjoker/cocoshape
+          path: cocoshape
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libgl-dev xvfb libgl1-mesa-dri libglx-mesa0
+
+      - name: Build CocoShape
+        run: |
+          cmake -S cocoshape -B cocoshape/build -DCMAKE_BUILD_TYPE=Release -DCOCOSHAPE_BUILD_TESTS=OFF
+          cmake --build cocoshape/build -j --target cocoshape
+
+      - name: Build the tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMCPCHAT_BUILD_GUI=OFF
+          cmake --build build -j
+
+      - name: Run against the editor
+        run: |
+          export COCOSHAPE_BIN="$(find "$PWD/cocoshape" -type f -name cocoshape -perm -u+x | head -n 1)"
+          test -n "$COCOSHAPE_BIN"
+          xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" ./build/tests/mcpchat_e2e
+
+  windows-msvc:
+    name: Windows (MSVC, static runtime)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -A x64
+          cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Check the executables depend on no runtime DLL
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($exe in Get-ChildItem build/Release/*.exe, build/tests/Release/*.exe) {
+            $dlls = (& dumpbin /dependents $exe.FullName | Select-String -Pattern '^\s+\S+\.dll\s*$' | ForEach-Object { $_.Line.Trim() })
+            Write-Host "$($exe.Name): $($dlls -join ', ')"
+            if ($dlls | Where-Object { $_ -match '(?i)^(vcruntime|msvcp|msvcr|ucrtbase|api-ms-win-crt)' }) { $bad += $exe.Name }
+          }
+          if ($bad.Count -gt 0) { Write-Error "runtime DLL dependency in: $($bad -join ', ')"; exit 1 }
+          Write-Host "no runtime DLL dependency"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage | Out-Null
+          Copy-Item build/Release/mcpchat.exe, README.md stage/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpchat-windows-x64
+          path: stage
+
+  windows-mingw:
+    name: Windows (MinGW cross build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+
+      - name: Check the executables only import Windows system DLLs
+        run: |
+          allowed='^(KERNEL32|USER32|GDI32|OPENGL32|SHELL32|WINHTTP|WS2_32|ADVAPI32|msvcrt)\.dll$'
+          status=0
+          for exe in build/*.exe build/tests/*.exe; do
+            for dll in $(x86_64-w64-mingw32-objdump -p "$exe" | awk '/DLL Name/ {print $3}' | sort -u); do
+              if ! echo "$dll" | grep -Eiq "$allowed"; then
+                echo "$exe imports $dll"
+                status=1
+              fi
+            done
+          done
+          exit $status
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_version != ''
+    needs: [linux, e2e, windows-msvc, windows-mingw]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.release_version || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create archives
+        run: |
+          mkdir -p dist
+          for dir in artifacts/*; do
+            name="$(basename "$dir")-${VERSION}"
+            chmod +x "$dir"/mcpchat 2>/dev/null || true
+            (cd "$dir" && zip -qr "../../dist/${name}.zip" .)
+          done
+          ls -la dist
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          files: dist/*.zip
+          generate_release_notes: true
+          prerelease: ${{ contains(env.VERSION, '-') }}
