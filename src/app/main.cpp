@@ -2,6 +2,7 @@
 #include "render/GlBackend.h"
 #include "ui/ChatSession.h"
 #include "ui/ChatWindow.h"
+#include "util/Version.h"
 
 #include <platform.h>
 
@@ -249,7 +250,8 @@ int main()
     }
 
     WindowConfig config = {};
-    config.title = "mcpchat";
+    const std::string title = mcpchat::versionText();
+    config.title = title.c_str();
     config.width = 1100;
     config.height = 780;
     config.x = WINDOW_POS_CENTERED;

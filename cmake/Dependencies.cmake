@@ -1,10 +1,11 @@
-# zen_platform and iGUI, pinned to a commit and fetched at configure time.
+# zen_platform and iGUI, pinned to a commit and fetched at configure time. A plain variable, so that moving a pin
+# here takes effect on the next configure instead of losing to the value an older configure left in the cache.
 include(FetchContent)
 
-set(MCPCHAT_ZEN_PLATFORM_TAG b604b878862cbaa4a5e1abf1904d59cba027a3cf CACHE STRING "zen_platform commit")
-set(MCPCHAT_IGUI_TAG 7ddc1ea1726b962e09395097c088fa7fa0b2c50a CACHE STRING "iGUI commit")
+set(MCPCHAT_ZEN_PLATFORM_TAG 9c6804885b9058526e91e71928ad686122c160be)
+set(MCPCHAT_IGUI_TAG 7ddc1ea1726b962e09395097c088fa7fa0b2c50a)
 # iGUI's submodule names a containers commit missing from its remote, so containers is fetched on its own.
-set(MCPCHAT_CONTAINERS_TAG e44adee6265b60ead8304e0826e33d6f35ea4754 CACHE STRING "containers commit")
+set(MCPCHAT_CONTAINERS_TAG e44adee6265b60ead8304e0826e33d6f35ea4754)
 
 if(MCPCHAT_BUILD_GUI)
     set(PLATFORM_BUILD_TESTS OFF CACHE BOOL "" FORCE)

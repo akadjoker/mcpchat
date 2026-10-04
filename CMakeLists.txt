@@ -12,6 +12,8 @@ if(MSVC)
     add_compile_options(/utf-8)
 endif()
 
+set(MCPCHAT_VENDOR "DjokerSoft" CACHE STRING "Vendor shown in the window title and the about line")
+
 option(MCPCHAT_BUILD_GUI "Build the window (zen_platform + iGUI)" ON)
 option(MCPCHAT_BUILD_TESTS "Build the tests" ON)
 
@@ -47,7 +49,7 @@ else()
 endif()
 target_include_directories(mcpchat_core PUBLIC src third_party)
 target_link_libraries(mcpchat_core PUBLIC Threads::Threads)
-target_compile_definitions(mcpchat_core PUBLIC MCPCHAT_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(mcpchat_core PUBLIC MCPCHAT_VERSION="${PROJECT_VERSION}" MCPCHAT_VENDOR="${MCPCHAT_VENDOR}")
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(mcpchat_core PRIVATE -Wall -Wextra)
 endif()
