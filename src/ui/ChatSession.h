@@ -31,10 +31,12 @@ struct ChatImage
 };
 
 // An image the user brings into the conversation: the file's own bytes go to the model, the decoded pixels to the
-// window. `preview` is shared with the entry the message makes.
+// window. `preview` is shared with the entry the message makes. `path` is the file, absolute, for the tools that
+// read one; it is empty when the image has no file.
 struct ChatAttachment
 {
     std::string name;
+    std::string path;
     std::string mimeType;
     std::vector<std::uint8_t> bytes;
     std::shared_ptr<ChatImage> preview;
@@ -42,7 +44,8 @@ struct ChatAttachment
 
 // Reads an image file. False with `error` set when it is missing, unreadable, too big or not an image we decode.
 bool loadAttachment(const std::filesystem::path& path, ChatAttachment& out, std::string& error);
-// Same, from PNG bytes already in memory (the clipboard).
+// Same, from PNG bytes already in memory (the clipboard). They are also written to a file in the temporary
+// directory, so this image has a path too; it goes without one when the file cannot be written.
 bool loadAttachmentFromPng(std::vector<std::uint8_t> bytes, const std::string& name, ChatAttachment& out,
                            std::string& error);
 

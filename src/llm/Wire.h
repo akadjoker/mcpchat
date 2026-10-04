@@ -15,6 +15,19 @@ namespace mcpchat
 // messages as a `user` data-URI message (a user message in between would break the tool_call/tool pairing).
 Json toWireMessages(const std::vector<Json>& messages, bool vision);
 
+// An image the user attaches to a message: `data` is the file's bytes in base64, `path` the file it came from
+// (empty when there is none).
+struct UserImage
+{
+    std::string mimeType;
+    std::string data;
+    std::string path;
+};
+
+// The `content` of a user message: the text alone, or a list of parts when images ride along. An image that has a
+// file is also named in the text, so the model can hand the path to a tool that reads files.
+Json userContent(const std::string& text, const std::vector<UserImage>& images);
+
 // The assistant reply as stored in the conversation; arguments are normalised JSON ("{}" when unusable), since
 // servers would reject the original text.
 Json assistantToHistory(const AssistantMessage& reply);

@@ -23,3 +23,10 @@ if(WIN32)
     target_link_libraries(mcpchat_e2e PRIVATE ws2_32)
 endif()
 add_test(NAME mcpchat_e2e COMMAND mcpchat_e2e)
+
+# The agent, the model client and the MCP client without the window: one message from the command line.
+add_executable(mcpchat_headless HeadlessChat.cpp)
+target_link_libraries(mcpchat_headless PRIVATE mcpchat_core)
+if(WIN32)
+    target_link_libraries(mcpchat_headless PRIVATE ws2_32)
+endif()

@@ -33,6 +33,28 @@ std::string textOfParts(const Json& content)
 }
 } // namespace
 
+Json userContent(const std::string& text, const std::vector<UserImage>& images)
+{
+    if (images.empty())
+        return Json(text);
+    std::string words = trim(text).empty() ? std::string() : text;
+    for (const UserImage& image : images)
+    {
+        if (image.path.empty())
+            continue;
+        if (!words.empty())
+            words += "\n";
+        words += "[attached image: " + image.path + "]";
+    }
+    Json parts = Json::array();
+    if (!words.empty())
+        parts.push_back({{"type", "text"}, {"text", words}});
+    for (const UserImage& image : images)
+        parts.push_back({{"type", "image_url"},
+                         {"image_url", {{"url", "data:" + image.mimeType + ";base64," + image.data}}}});
+    return parts;
+}
+
 Json toWireMessages(const std::vector<Json>& messages, bool vision)
 {
     Json wire = Json::array();

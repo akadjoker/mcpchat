@@ -66,7 +66,9 @@ editados à mão.
 - Escreve na caixa de baixo e **Ctrl+Enter** (ou Send) envia; Enter muda de linha.
 - **Attach** junta uma imagem à mensagem seguinte (também por `/attach <caminho>`, com o caminho entre aspas se tiver
   espaços; `/detach` tira-a). A imagem vai para o modelo como *part* `image_url` e o que escreveres ao lado é o
-  pedido — por exemplo, ligado a um servidor MCP de modelação, "faz uma mesh parecida com esta". Só perfis com
+  pedido — por exemplo, ligado a um servidor MCP de modelação, "faz uma mesh parecida com esta". O caminho do
+  ficheiro vai também no texto (`[attached image: ...]`), para o modelo o poder dar a uma tool que leia ficheiros;
+  uma imagem colada da área de transferência é gravada na pasta temporária para ter um. Só perfis com
   **Images** ligado a recebem; nos outros a mensagem não é enviada e o texto e a imagem ficam à espera.
 - A barra de cima escolhe o perfil (o LLM) e mostra cada servidor: verde ligado, vermelho não (passa o rato por cima
   para ver as tools ou o erro). **Reconnect** volta a ligar aos servidores.

@@ -214,6 +214,29 @@ TEST(wireMessagesCarryImagesTheUserAttached)
     CHECK(blind[0]["content"] == "make a mesh like this");
 }
 
+TEST(userContentNamesTheFilesOfTheImagesAttached)
+{
+    // Without images the message stays plain text.
+    CHECK(userContent("hello", {}) == Json("hello"));
+
+    // An image with a file is named in the text, so the model can pass the path to a tool.
+    const Json one = userContent("make this", {{"image/png", "AA", "/home/eu/boneco.png"}});
+    CHECK(one.is_array() && one.size() == 2);
+    CHECK(one[0]["text"] == "make this\n[attached image: /home/eu/boneco.png]");
+    CHECK(one[1]["image_url"]["url"] == "data:image/png;base64,AA");
+
+    // One line per file, in order; an image without a file adds none.
+    const Json several = userContent("", {{"image/png", "AA", "/a.png"}, {"image/jpeg", "BB", ""},
+                                          {"image/png", "CC", "/c.png"}});
+    CHECK(several.size() == 4);
+    CHECK(several[0]["text"] == "[attached image: /a.png]\n[attached image: /c.png]");
+    CHECK(several[2]["image_url"]["url"] == "data:image/jpeg;base64,BB");
+
+    // No words and no file: the image alone, as before.
+    const Json bare = userContent("  ", {{"image/png", "AA", ""}});
+    CHECK(bare.size() == 1 && bare[0]["type"] == "image_url");
+}
+
 TEST(anthropicRequestMapsTheConversation)
 {
     const Json tools = Json::array({Json{{"type", "function"},

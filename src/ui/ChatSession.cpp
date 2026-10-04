@@ -2,11 +2,13 @@
 
 #include "llm/AnthropicProvider.h"
 #include "llm/OpenAiProvider.h"
+#include "llm/Wire.h"
 #include "render/Image.h"
 #include "util/Base64.h"
 #include "util/Paths.h"
 #include "util/Strings.h"
 
+#include <chrono>
 #include <fstream>
 #include <iterator>
 
@@ -46,6 +48,24 @@ bool decodeInto(std::vector<std::uint8_t>& bytes, const std::string& mimeType, c
     out.bytes = std::move(bytes);
     out.preview = std::move(preview);
     return true;
+}
+
+// A file for an image that came without one, so a tool can still be given a path. Empty when it cannot be written.
+std::string writeTemporaryImage(const std::vector<std::uint8_t>& bytes)
+{
+    std::error_code code;
+    const std::filesystem::path folder = std::filesystem::temp_directory_path(code) / "mcpchat";
+    if (code)
+        return std::string();
+    std::filesystem::create_directories(folder, code);
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    const std::filesystem::path path = folder / ("clipboard-" + std::to_string(now) + ".png");
+    std::ofstream file(path, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    file.close();
+    return file ? path.u8string() : std::string();
 }
 
 // The provider the profile asks for; both carry the same settings apart from their shape.
@@ -107,7 +127,11 @@ bool loadAttachment(const std::filesystem::path& path, ChatAttachment& out, std:
         error = "the file is empty";
         return false;
     }
-    return decodeInto(bytes, mimeType, path.filename().u8string(), out, error);
+    if (!decodeInto(bytes, mimeType, path.filename().u8string(), out, error))
+        return false;
+    const std::filesystem::path absolute = std::filesystem::absolute(path, code);
+    out.path = (code ? path : absolute).lexically_normal().u8string();
+    return true;
 }
 
 bool loadAttachmentFromPng(std::vector<std::uint8_t> bytes, const std::string& name, ChatAttachment& out,
@@ -123,7 +147,10 @@ bool loadAttachmentFromPng(std::vector<std::uint8_t> bytes, const std::string& n
         error = "the clipboard holds no image";
         return false;
     }
-    return decodeInto(bytes, "image/png", name, out, error);
+    if (!decodeInto(bytes, "image/png", name, out, error))
+        return false;
+    out.path = writeTemporaryImage(out.bytes);
+    return true;
 }
 
 const std::map<std::string, ExposedTool>& ChatSession::HubProxy::tools() const
@@ -353,21 +380,11 @@ bool ChatSession::send(const std::string& text, const std::vector<ChatAttachment
         return false;
     }
     notifyUser(text, attachments);
-    // A message with images is a list of parts; without them it stays plain text, as the API prefers.
-    Json content = Json(text);
-    if (!attachments.empty())
-    {
-        Json parts = Json::array();
-        if (!trim(text).empty())
-            parts.push_back({{"type", "text"}, {"text", text}});
-        for (const ChatAttachment& attachment : attachments)
-        {
-            const std::string data = base64Encode(attachment.bytes.data(), attachment.bytes.size());
-            parts.push_back({{"type", "image_url"},
-                             {"image_url", {{"url", "data:" + attachment.mimeType + ";base64," + data}}}});
-        }
-        content = std::move(parts);
-    }
+    std::vector<UserImage> images;
+    for (const ChatAttachment& attachment : attachments)
+        images.push_back({attachment.mimeType, base64Encode(attachment.bytes.data(), attachment.bytes.size()),
+                          attachment.path});
+    const Json content = userContent(text, images);
     mStatus = "Waiting for " + profile->model + "...";
     const Profile chosen = *profile;
     const AgentConfig config = agentConfig(snapshot);
