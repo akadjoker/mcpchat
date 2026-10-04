@@ -3,6 +3,7 @@
 #include "LoopbackServer.h"
 
 #include "agent/Agent.h"
+#include "llm/AnthropicProvider.h"
 #include "llm/OpenAiProvider.h"
 #include "mcp/HttpTransport.h"
 #include "mcp/ServerHub.h"
@@ -194,6 +195,117 @@ TEST(providerStreamsTextAndToolCalls)
     CHECK(requests[0].path == "/v1/chat/completions" && requests[0].headers.at("authorization") == "Bearer secret");
     const Json body = Json::parse(requests[0].body);
     CHECK(body["model"] == "m" && body["stream"] == true && !body.contains("tools"));
+}
+
+TEST(anthropicProviderStreamsTextAndToolCalls)
+{
+    const auto event = [](const std::string& type, Json payload)
+    {
+        payload["type"] = type;
+        return "event: " + type + "\ndata: " + dump(payload) + "\n\n";
+    };
+    LoopbackServer::Reply reply;
+    reply.headers.push_back({"Content-Type", "text/event-stream"});
+    reply.chunks = {
+        event("message_start", {{"message", {{"id", "m1"},
+                                             {"role", "assistant"},
+                                             {"usage", {{"input_tokens", 7}, {"output_tokens", 0}}}}}}),
+        event("content_block_start", {{"index", 0}, {"content_block", {{"type", "text"}, {"text", ""}}}}),
+        event("content_block_delta", {{"index", 0}, {"delta", {{"type", "text_delta"}, {"text", "The sum "}}}}),
+        event("content_block_delta", {{"index", 0}, {"delta", {{"type", "text_delta"}, {"text", "is 42."}}}}),
+        event("content_block_stop", {{"index", 0}}),
+        event("content_block_start",
+              {{"index", 1},
+               {"content_block", {{"type", "tool_use"}, {"id", "toolu_1"}, {"name", "add"}, {"input", Json::object()}}}}),
+        event("content_block_delta",
+              {{"index", 1}, {"delta", {{"type", "input_json_delta"}, {"partial_json", R"({"a":2,)"}}}}),
+        event("content_block_delta",
+              {{"index", 1}, {"delta", {{"type", "input_json_delta"}, {"partial_json", R"("b":40})"}}}}),
+        event("content_block_stop", {{"index", 1}}),
+        event("message_delta", {{"delta", {{"stop_reason", "tool_use"}}}, {"usage", {{"output_tokens", 15}}}}),
+        event("message_stop", Json::object()),
+    };
+    LoopbackServer server([&](const LoopbackServer::Request&) { return reply; });
+    AnthropicProvider::Settings settings;
+    settings.baseUrl = server.url("/v1/");
+    settings.model = "claude-x";
+    settings.apiKey = "key";
+    AnthropicProvider provider(settings);
+    std::string streamed;
+    const AssistantMessage answer = provider.complete(
+        {{{"role", "system"}, {"content", "be brief"}}, {{"role", "user"}, {"content", "hi"}}}, Json::array(),
+        [&](const std::string& piece) { streamed += piece + "|"; }, nullptr);
+    CHECK(answer.content == "The sum is 42." && streamed == "The sum |is 42.|");
+    CHECK(answer.toolCalls.size() == 1 && answer.toolCalls[0].id == "toolu_1" && answer.toolCalls[0].name == "add");
+    CHECK(answer.toolCalls[0].arguments && (*answer.toolCalls[0].arguments)["b"] == 40);
+    CHECK(answer.finishReason == "tool_use");
+    CHECK(answer.usage && answer.usage->promptTokens == 7 && answer.usage->completionTokens == 15);
+
+    const LoopbackServer::Request request = server.requests().at(0);
+    CHECK(request.path == "/v1/messages");
+    CHECK(request.headers.count("x-api-key") == 1);
+    CHECK(request.headers.at("anthropic-version") == "2023-06-01");
+    const Json body = Json::parse(request.body);
+    CHECK(body["model"] == "claude-x" && body["stream"] == true && body["max_tokens"] == 8192);
+    CHECK(body["system"] == "be brief" && body["messages"][0]["role"] == "user");
+}
+
+TEST(anthropicProviderReadsAWholeMessageAndReportsErrors)
+{
+    LoopbackServer::Reply whole;
+    whole.headers.push_back({"Content-Type", "application/json"});
+    whole.chunks = {dump({{"id", "m1"},
+                          {"role", "assistant"},
+                          {"content", Json::array({{{"type", "text"}, {"text", "plain"}}})},
+                          {"stop_reason", "end_turn"},
+                          {"usage", {{"input_tokens", 3}, {"output_tokens", 1}}}})};
+    LoopbackServer::Reply refused;
+    refused.status = 401;
+    refused.headers.push_back({"Content-Type", "application/json"});
+    refused.chunks = {R"({"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}})"};
+    std::vector<LoopbackServer::Reply> script = {whole, refused};
+    std::size_t next = 0;
+    LoopbackServer server(
+        [&](const LoopbackServer::Request&)
+        {
+            return script.at(next++);
+        });
+    AnthropicProvider::Settings settings;
+    // A bare host still gets the version prefix.
+    settings.baseUrl = server.url("");
+    settings.model = "claude-x";
+    settings.stream = false;
+    AnthropicProvider provider(settings);
+    std::string streamed;
+    const AssistantMessage answer = provider.complete(
+        {{{"role", "user"}, {"content", "hi"}}}, Json::array(),
+        [&](const std::string& piece) { streamed += piece; }, nullptr);
+    CHECK(answer.content == "plain" && answer.toolCalls.empty() && answer.finishReason == "end_turn");
+    CHECK(streamed == "plain");
+    CHECK(server.requests().at(0).path == "/v1/messages");
+
+    std::string message;
+    try
+    {
+        provider.complete({{{"role", "user"}, {"content", "hi"}}}, Json::array(), TextDelta(), nullptr);
+    }
+    catch (const LlmError& error)
+    {
+        message = error.what();
+    }
+    CHECK(message == "The LLM server answered HTTP 401: invalid x-api-key");
+
+    bool invalid = false;
+    try
+    {
+        settings.baseUrl = "localhost:1234";
+        AnthropicProvider broken(settings);
+    }
+    catch (const LlmError&)
+    {
+        invalid = true;
+    }
+    CHECK(invalid);
 }
 
 TEST(providerErrorsAndFallbacks)

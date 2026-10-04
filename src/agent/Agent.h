@@ -92,7 +92,8 @@ public:
 
     Agent(LlmProvider& provider, ToolHost& host, AgentListener& listener, AgentConfig config, Confirm confirm);
 
-    RunResult run(const std::string& userText, CancelToken* cancel);
+    // `userContent` is the message text, or a list of parts (text and image_url) when images ride along.
+    RunResult run(const Json& userContent, CancelToken* cancel);
     void reset();
     // Takes effect from the next run; the conversation is kept.
     void setConfig(AgentConfig config)

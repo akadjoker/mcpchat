@@ -9,6 +9,7 @@ namespace mcpchat
 
 std::string trim(std::string_view text);
 bool startsWith(std::string_view text, std::string_view prefix);
+bool endsWith(std::string_view text, std::string_view suffix);
 std::string toLower(std::string_view text);
 
 // The longest prefix of at most `bytes` bytes that does not cut a UTF-8 sequence.

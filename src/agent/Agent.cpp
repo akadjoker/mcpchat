@@ -40,10 +40,10 @@ Json Agent::toolDefinitions() const
     return tools;
 }
 
-RunResult Agent::run(const std::string& userText, CancelToken* cancel)
+RunResult Agent::run(const Json& userContent, CancelToken* cancel)
 {
     const Json tools = toolDefinitions();
-    mMessages.push_back({{"role", "user"}, {"content", userText}});
+    mMessages.push_back({{"role", "user"}, {"content", userContent}});
     const Json system = {{"role", "system"}, {"content", systemPrompt()}};
 
     for (int step = 1; step <= mConfig.maxSteps; ++step)
@@ -207,6 +207,12 @@ Json Agent::exportConversation() const
     {
         if (message.contains("image"))
             message["image"]["data"] = "<omitted>";
+        if (message.contains("content") && message["content"].is_array())
+        {
+            for (Json& part : message["content"])
+                if (part.value("type", "") == "image_url")
+                    part["image_url"]["url"] = "<omitted>";
+        }
         messages.push_back(message);
     }
     return {{"system_prompt", systemPrompt()}, {"messages", messages}};

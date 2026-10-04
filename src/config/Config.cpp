@@ -212,6 +212,31 @@ bool parseConfirmPolicy(const std::string& text, ConfirmPolicy& out)
     return false;
 }
 
+const char* toString(LlmApi api)
+{
+    switch (api)
+    {
+    case LlmApi::OpenAi:
+        return "openai";
+    case LlmApi::Anthropic:
+        return "anthropic";
+    }
+    return "openai";
+}
+
+bool parseLlmApi(const std::string& text, LlmApi& out)
+{
+    for (const LlmApi api : {LlmApi::OpenAi, LlmApi::Anthropic})
+    {
+        if (text == toString(api))
+        {
+            out = api;
+            return true;
+        }
+    }
+    return false;
+}
+
 const Profile* Config::profile() const
 {
     for (const Profile& candidate : profiles)
@@ -277,13 +302,193 @@ Config Config::example()
     openai.model = "gpt-4.1";
     openai.apiKeyEnv = "OPENAI_API_KEY";
     openai.vision = true;
-    config.profiles = {ollama, lmstudio, openai};
+    Profile deepseek;
+    deepseek.name = "deepseek";
+    deepseek.baseUrl = "https://api.deepseek.com/v1";
+    // The model it starts on, deepseek-flash, accepts images; the other one, deepseek-v4-pro, does not.
+    deepseek.model = "deepseek-flash";
+    deepseek.apiKeyEnv = "DEEPSEEK_API_KEY";
+    deepseek.vision = true;
+    Profile claude;
+    claude.name = "claude";
+    claude.api = LlmApi::Anthropic;
+    claude.baseUrl = "https://api.anthropic.com/v1";
+    claude.model = "claude-sonnet-5-5";
+    claude.apiKeyEnv = "ANTHROPIC_API_KEY";
+    claude.vision = true;
+    config.profiles = {ollama, lmstudio, openai, deepseek, claude};
     return config;
 }
 
 std::filesystem::path defaultConfigPath()
 {
     return configDirectory() / "config.json";
+}
+
+namespace
+{
+// Case and trailing slashes do not make two base URLs different.
+std::string normalizeUrl(const std::string& url)
+{
+    std::string out = toLower(trim(url));
+    while (!out.empty() && out.back() == '/')
+        out.pop_back();
+    return out;
+}
+
+Json toJson(const ProviderCatalog& catalog)
+{
+    Json providers = Json::array();
+    for (const ProviderPreset& preset : catalog.providers)
+    {
+        providers.push_back({{"name", preset.name},
+                             {"api", toString(preset.api)},
+                             {"base_url", preset.baseUrl},
+                             {"api_key_env", preset.apiKeyEnv},
+                             {"models", preset.models}});
+    }
+    return {{"version", kFileVersion}, {"providers", providers}};
+}
+
+bool fromJson(const Json& data, ProviderCatalog& out, std::string& error)
+{
+    out = ProviderCatalog();
+    Reader top(data, "the catalog", error);
+    int version = kFileVersion;
+    top.number("version", version);
+    if (!top.ok())
+        return false;
+    const Json empty = Json::array();
+    const Json* providersField = top.raw("providers");
+    const Json& providers = providersField ? *providersField : empty;
+    top.finish();
+    if (!top.ok() || !providers.is_array())
+    {
+        if (top.ok())
+            error = "'providers' must be an array";
+        return false;
+    }
+    for (std::size_t i = 0; i < providers.size(); ++i)
+    {
+        ProviderPreset preset;
+        Reader read(providers[i], "providers[" + std::to_string(i) + "]", error);
+        read.text("name", preset.name);
+        std::string api;
+        read.text("api", api);
+        read.text("base_url", preset.baseUrl);
+        read.text("api_key_env", preset.apiKeyEnv);
+        read.texts("models", preset.models);
+        if (!api.empty() && !parseLlmApi(api, preset.api))
+        {
+            error = "providers[" + std::to_string(i) + "]: 'api' must be \"openai\" or \"anthropic\"";
+            return false;
+        }
+        read.finish();
+        if (!read.ok())
+            return false;
+        if (trim(preset.name).empty())
+        {
+            error = "providers[" + std::to_string(i) + "]: 'name' is empty";
+            return false;
+        }
+        out.providers.push_back(std::move(preset));
+    }
+    return true;
+}
+} // namespace
+
+const ProviderPreset* ProviderCatalog::match(const Profile& profile) const
+{
+    const std::string wanted = normalizeUrl(profile.baseUrl);
+    if (wanted.empty())
+        return nullptr;
+    for (const ProviderPreset& preset : providers)
+        if (normalizeUrl(preset.baseUrl) == wanted && preset.api == profile.api)
+            return &preset;
+    return nullptr;
+}
+
+void applyPreset(const ProviderPreset& preset, Profile& profile)
+{
+    profile.api = preset.api;
+    profile.baseUrl = preset.baseUrl;
+    if (!preset.apiKeyEnv.empty())
+        profile.apiKeyEnv = preset.apiKeyEnv;
+    if (!preset.models.empty() &&
+        std::find(preset.models.begin(), preset.models.end(), profile.model) == preset.models.end())
+        profile.model = preset.models.front();
+}
+
+ProviderCatalog ProviderCatalog::example()
+{
+    ProviderCatalog catalog;
+    ProviderPreset claude;
+    claude.name = "Anthropic (Claude)";
+    claude.api = LlmApi::Anthropic;
+    claude.baseUrl = "https://api.anthropic.com/v1";
+    claude.apiKeyEnv = "ANTHROPIC_API_KEY";
+    claude.models = {"claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5-20251001"};
+    ProviderPreset deepseek;
+    deepseek.name = "DeepSeek";
+    deepseek.baseUrl = "https://api.deepseek.com/v1";
+    deepseek.apiKeyEnv = "DEEPSEEK_API_KEY";
+    deepseek.models = {"deepseek-flash", "deepseek-v4-pro"};
+    ProviderPreset openai;
+    openai.name = "OpenAI";
+    openai.baseUrl = "https://api.openai.com/v1";
+    openai.apiKeyEnv = "OPENAI_API_KEY";
+    // The Sol and Luna models restrict tool calling over chat/completions, which this program needs.
+    openai.models = {"gpt-6-astra", "gpt-6-sol"};
+    ProviderPreset ollama;
+    ollama.name = "Ollama (local)";
+    ollama.baseUrl = "http://localhost:11434/v1";
+    ProviderPreset lmstudio;
+    lmstudio.name = "LM Studio (local)";
+    lmstudio.baseUrl = "http://localhost:1234/v1";
+    catalog.providers = {claude, deepseek, openai, ollama, lmstudio};
+    return catalog;
+}
+
+std::filesystem::path defaultCatalogPath()
+{
+    return configDirectory() / "providers.json";
+}
+
+void loadCatalog(const std::filesystem::path& path, ProviderCatalog& out, std::string& error)
+{
+    out = ProviderCatalog::example();
+    error.clear();
+    std::error_code code;
+    if (!std::filesystem::exists(path, code))
+    {
+        // Written next to the configuration so the models can be corrected without touching the program.
+        saveCatalog(path, out, error);
+        return;
+    }
+    std::string text;
+    if (!readTextFile(path, text))
+    {
+        error = path.u8string() + ": cannot read the file";
+        return;
+    }
+    const Json data = Json::parse(text, nullptr, false);
+    if (data.is_discarded())
+    {
+        error = path.u8string() + ": not valid JSON";
+        return;
+    }
+    ProviderCatalog read;
+    if (!fromJson(data, read, error))
+    {
+        error = path.u8string() + ": " + error;
+        return;
+    }
+    out = std::move(read);
+}
+
+bool saveCatalog(const std::filesystem::path& path, const ProviderCatalog& catalog, std::string& error)
+{
+    return writeTextFileAtomic(path, toJson(catalog).dump(2) + "\n", &error);
 }
 
 Json toJson(const Config& config)
@@ -305,6 +510,7 @@ Json toJson(const Config& config)
     for (const Profile& item : config.profiles)
     {
         profiles.push_back({{"name", item.name},
+                            {"api", toString(item.api)},
                             {"base_url", item.baseUrl},
                             {"model", item.model},
                             {"api_key_env", item.apiKeyEnv},
@@ -375,6 +581,8 @@ bool fromJson(const Json& data, Config& out, std::string& error)
         Profile item;
         Reader read(profiles[i], "profiles[" + std::to_string(i) + "]", error);
         read.text("name", item.name);
+        std::string api;
+        read.text("api", api);
         read.text("base_url", item.baseUrl);
         read.text("model", item.model);
         read.text("api_key_env", item.apiKeyEnv);
@@ -386,6 +594,11 @@ bool fromJson(const Json& data, Config& out, std::string& error)
         read.number("request_timeout", item.requestTimeout);
         read.number("context_chars", item.contextChars);
         read.text("system_prompt", item.systemPrompt);
+        if (!api.empty() && !parseLlmApi(api, item.api))
+        {
+            error = "profiles[" + std::to_string(i) + "]: 'api' must be \"openai\" or \"anthropic\"";
+            return false;
+        }
         read.finish();
         if (!read.ok())
             return false;

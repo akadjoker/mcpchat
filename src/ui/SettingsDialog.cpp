@@ -2,6 +2,7 @@
 
 #include "ui/ChatSession.h"
 #include "util/Strings.h"
+#include "util/Version.h"
 
 #include <algorithm>
 #include <cmath>
@@ -302,8 +303,63 @@ void SettingsDialog::drawProfiles(ig::Context& ui, ChatSession& session, float t
     const std::string oldName = profile.name;
     if (editString(ui, "name", profile.name, form.field("Name")) && mDraft.currentProfile == oldName)
         mDraft.currentProfile = profile.name;
+
+    // The known providers come from providers.json; "Custom" leaves everything as typed.
+    const std::vector<ProviderPreset>& presets = session.catalog().providers;
+    std::vector<std::string> providerNames;
+    for (const ProviderPreset& preset : presets)
+        providerNames.push_back(preset.name);
+    static const std::string customEntry = "Custom (typed below)";
+    providerNames.push_back(customEntry);
+    std::vector<ig::StringView> providerItems;
+    for (const std::string& name : providerNames)
+        providerItems.push_back(view(name));
+    const ProviderPreset* matched = session.catalog().match(profile);
+    int provider = matched ? static_cast<int>(matched - presets.data()) : static_cast<int>(presets.size());
+    const ig::Rect providerRect = form.field("Provider");
+    if (ui.comboBox("provider", provider, ig::Span<const ig::StringView>(providerItems.data(), providerItems.size()),
+                    ig::Rect(providerRect.x, providerRect.y, std::min(providerRect.width, 300.0f), row)) &&
+        provider >= 0 && provider < static_cast<int>(presets.size()))
+        applyPreset(presets[static_cast<std::size_t>(provider)], profile);
+    matched = session.catalog().match(profile);
+
+    static const ig::StringView apis[] = {"OpenAI-compatible", "Anthropic (Claude)"};
+    int api = profile.api == LlmApi::Anthropic ? 1 : 0;
+    const ig::Rect apiRect = form.field("Protocol");
+    if (ui.comboBox("api", api, ig::Span<const ig::StringView>(apis, 2),
+                    ig::Rect(apiRect.x, apiRect.y, std::min(apiRect.width, 300.0f), row)))
+        profile.api = api == 1 ? LlmApi::Anthropic : LlmApi::OpenAi;
     editString(ui, "base_url", profile.baseUrl, form.field("Base URL"));
-    editString(ui, "model", profile.model, form.field("Model"));
+
+    // The models of the matched provider are offered, but any name can be typed. The model in use is always among
+    // them, so the combo cannot show one model while the field holds another.
+    const std::vector<std::string> empty;
+    const std::vector<std::string>& models = matched ? matched->models : empty;
+    std::vector<std::string> choices;
+    if (!models.empty())
+    {
+        choices = models;
+        if (std::find(choices.begin(), choices.end(), profile.model) == choices.end() && !profile.model.empty())
+            choices.insert(choices.begin(), profile.model);
+    }
+    std::vector<ig::StringView> modelItems;
+    for (const std::string& model : choices)
+        modelItems.push_back(view(model));
+    const ig::Rect modelRect = form.field("Model");
+    float modelField = modelRect.x;
+    if (!modelItems.empty())
+    {
+        const float comboWidth = std::min(300.0f, modelRect.width * 0.5f);
+        const auto found = std::find(choices.begin(), choices.end(), profile.model);
+        int choice = found == choices.end() ? 0 : static_cast<int>(found - choices.begin());
+        if (ui.comboBox("model_list", choice, ig::Span<const ig::StringView>(modelItems.data(), modelItems.size()),
+                        ig::Rect(modelRect.x, modelRect.y, comboWidth, row)) &&
+            choice >= 0 && choice < static_cast<int>(choices.size()))
+            profile.model = choices[static_cast<std::size_t>(choice)];
+        modelField += comboWidth + gap;
+    }
+    editString(ui, "model", profile.model, ig::Rect(modelField, modelRect.y, modelRect.x + modelRect.width - modelField, row));
+
     editString(ui, "key_env", profile.apiKeyEnv, form.field("API key variable"));
 
     const ig::Rect keyRect = form.field("API key");
@@ -478,6 +534,14 @@ void SettingsDialog::drawGeneral(ig::Context& ui, ChatSession& session, float to
     form.y += gap;
     const std::string where = "Configuration file: " + session.configPath().u8string();
     ui.drawText(view(where), ig::Vec2(mLeft, form.y), kDim);
+
+    form.y += lineHeight;
+    const std::string providers = "Providers: " + defaultCatalogPath().u8string();
+    ui.drawText(view(providers), ig::Vec2(mLeft, form.y), kDim);
+
+    form.y += lineHeight + gap;
+    const std::string about = versionText();
+    ui.drawText(view(about), ig::Vec2(mLeft, form.y), theme.labelText);
 }
 
 } // namespace mcpchat

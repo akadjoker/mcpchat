@@ -10,18 +10,21 @@ interface desenhada pelo [iGUI](https://github.com/akadjoker/iGUI). Um só execu
 ![mcpchat ligado ao CocoShape](docs/screenshot.png)
 
 Não está preso a nenhum projeto: qualquer servidor MCP serve (o editor [CocoShape](https://github.com/akadjoker/cocoshape)
-é um deles), e qualquer LLM com a API de chat da OpenAI (Ollama, LM Studio, vLLM, llama.cpp server, OpenAI, DeepSeek...).
+é um deles), e qualquer LLM com a API de chat da OpenAI (Ollama, LM Studio, vLLM, llama.cpp server, OpenAI, DeepSeek...)
+ou com a Messages API da Anthropic (Claude).
 
 ```
-tu ──► mcpchat ──(API OpenAI-compatível)──► LLM (local ou remoto)
+tu ──► mcpchat ──(chat/completions ou Messages API)──► LLM (local ou remoto)
           │
           └──(MCP: HTTP ou stdio)──► servidor(es) MCP ──► o programa (editor, ficheiros, ...)
 ```
 
 - **MCP:** Streamable HTTP (respostas JSON ou *event-stream*, sessão `Mcp-Session-Id`) e stdio (processo filho);
   handshake `initialize` nas revisões `2024-11-05` a `2025-11-25`; vários servidores ao mesmo tempo.
-- **LLM:** protocolo `chat/completions` com `tools`, em *streaming* ou não (se o servidor recusar *streaming* com
-  tools, repete sem); as imagens das tools vão para o modelo quando ele as vê.
+- **LLM:** dois protocolos, escolhidos por perfil — `chat/completions` com `tools` (DeepSeek, Ollama, OpenAI...) e a
+  Messages API da Anthropic (`tool_use`/`tool_result`, Claude); ambos em *streaming* ou não, e o primeiro repete sem
+  *streaming* se o servidor o recusar com tools. As imagens das tools vão para o modelo quando ele as vê, e as
+  imagens que juntas à mensagem também (só para perfis com "Images").
 - **Janela:** o texto do modelo aparece à medida que chega, com blocos de código; cada chamada de tool fica numa caixa
   que abre com os argumentos, o resultado e as imagens; botão Copy em cada mensagem; Stop cancela o pedido em curso;
   as conversas podem ser gravadas em JSON.
@@ -33,8 +36,8 @@ Precisa de CMake 3.16+, um compilador C++17 e git (a zen_platform e o iGUI são 
 commit).
 
 ```bash
-# Linux (Debian/Ubuntu)
-sudo apt install libx11-dev libxrandr-dev libgl-dev libcurl4-openssl-dev
+# Linux (Debian/Ubuntu): zenity ou kdialog é só para o botão Attach
+sudo apt install libx11-dev libxrandr-dev libgl-dev libcurl4-openssl-dev zenity
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ./build/mcpchat
@@ -55,11 +58,16 @@ pelo CI a cada tag `v*`.
 
 ## Usar
 
-No primeiro arranque o mcpchat escreve uma configuração de exemplo em `~/.config/mcpchat/config.json` (Windows:
-`%APPDATA%\mcpchat\config.json`) com o CocoShape e três perfis (Ollama, LM Studio, OpenAI). Tudo se muda em
-**Settings**; o ficheiro também pode ser editado à mão.
+No primeiro arranque o mcpchat escreve duas configurações em `~/.config/mcpchat/` (Windows: `%APPDATA%\mcpchat\`):
+`config.json`, com o CocoShape e cinco perfis (Ollama, LM Studio, OpenAI, DeepSeek e Claude), e `providers.json`,
+com os provedores conhecidos e os modelos de cada um. Tudo se muda em **Settings**; os ficheiros também podem ser
+editados à mão.
 
 - Escreve na caixa de baixo e **Ctrl+Enter** (ou Send) envia; Enter muda de linha.
+- **Attach** junta uma imagem à mensagem seguinte (também por `/attach <caminho>`, com o caminho entre aspas se tiver
+  espaços; `/detach` tira-a). A imagem vai para o modelo como *part* `image_url` e o que escreveres ao lado é o
+  pedido — por exemplo, ligado a um servidor MCP de modelação, "faz uma mesh parecida com esta". Só perfis com
+  **Images** ligado a recebem; nos outros a mensagem não é enviada e o texto e a imagem ficam à espera.
 - A barra de cima escolhe o perfil (o LLM) e mostra cada servidor: verde ligado, vermelho não (passa o rato por cima
   para ver as tools ou o erro). **Reconnect** volta a ligar aos servidores.
 - **New chat** começa de novo; **Save chat** grava a conversa em `conversations/` ao lado da configuração.
@@ -78,8 +86,12 @@ No primeiro arranque o mcpchat escreve uma configuração de exemplo em `~/.conf
   ],
   "profiles": [
     {"name": "ollama", "base_url": "http://localhost:11434/v1", "model": "qwen2.5:14b"},
-    {"name": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1",
-     "api_key_env": "OPENAI_API_KEY", "vision": true}
+    {"name": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-6-astra",
+     "api_key_env": "OPENAI_API_KEY", "vision": true},
+    {"name": "deepseek", "api": "openai", "base_url": "https://api.deepseek.com/v1",
+     "model": "deepseek-flash", "api_key_env": "DEEPSEEK_API_KEY"},
+    {"name": "claude", "api": "anthropic", "base_url": "https://api.anthropic.com/v1",
+     "model": "claude-sonnet-5-5", "api_key_env": "ANTHROPIC_API_KEY", "vision": true}
   ]
 }
 ```
@@ -92,7 +104,8 @@ Com um servidor, o modelo vê os nomes das tools tal como são; com vários, `se
 
 | Campo | Significado |
 |---|---|
-| `base_url` | endereço OpenAI-compatível, com o prefixo de versão (`http://localhost:11434/v1`) |
+| `api` | `openai` (por omissão) para `chat/completions` — Ollama, LM Studio, vLLM, DeepSeek, OpenAI — ou `anthropic` para a Messages API do Claude |
+| `base_url` | endereço, com o prefixo de versão (`http://localhost:11434/v1`, `https://api.anthropic.com/v1`); um endereço sem `/v1` também é aceite no Claude |
 | `model` | nome do modelo no servidor |
 | `api_key_env` | **nome** da variável de ambiente com a chave (a chave nunca vai para o ficheiro) |
 | `vision` | o modelo aceita imagens; é dito por ti, não adivinhado ("Images" em Settings) |
@@ -107,6 +120,32 @@ Com um servidor, o modelo vê os nomes das tools tal como são; com vários, `se
 
 **Chaves e tokens** vêm da variável de ambiente indicada; em alternativa escrevem-se em Settings ("Set") e ficam só em
 memória enquanto o programa corre, nunca no ficheiro.
+
+## Provedores conhecidos
+
+Em **Settings → Model**, a combo **Provider** preenche o protocolo, o endereço e a variável da chave de um provedor
+conhecido, e a combo **Model** oferece os modelos desse provedor — o campo ao lado aceita na mesma qualquer nome
+escrito à mão (é o que precisas para um servidor local, cujos modelos só tu conheces).
+
+A lista vem de `providers.json`, ao lado do `config.json`, escrito no primeiro arranque e editável:
+
+```json
+{
+  "version": 1,
+  "providers": [
+    {"name": "DeepSeek", "api": "openai", "base_url": "https://api.deepseek.com/v1",
+     "api_key_env": "DEEPSEEK_API_KEY", "models": ["deepseek-flash", "deepseek-v4-pro"]},
+    {"name": "Anthropic (Claude)", "api": "anthropic", "base_url": "https://api.anthropic.com/v1",
+     "api_key_env": "ANTHROPIC_API_KEY",
+     "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5-20251001"]}
+  ]
+}
+```
+
+Os modelos são nomes que os provedores mudam com frequência, e por isso vivem neste ficheiro e não no programa:
+acrescenta os que quiseres, ou corrige-os quando um for substituído. Um ficheiro ilegível não impede o arranque — a
+janela di-lo e usa a lista de origem. Ao escolher um provedor cujo modelo atual não serve, o perfil passa para o
+primeiro da lista dele; o `Providers:` na aba **General** diz onde está o ficheiro.
 
 ## Com o CocoShape
 
@@ -132,10 +171,13 @@ sistema.
 
 ## Limites
 
-- Do lado do LLM, só a API OpenAI-compatível (cobre Ollama, LM Studio, vLLM, OpenAI, DeepSeek...); outras APIs entram
-  como mais um `LlmProvider` em `src/llm/`.
+- Do lado do LLM, dois protocolos: a API OpenAI-compatível (Ollama, LM Studio, vLLM, OpenAI, DeepSeek...) e a
+  Messages API da Anthropic (Claude). Outras APIs entram como mais um `LlmProvider` em `src/llm/`.
+- No Claude o `max_tokens` é obrigatório e está fixo em 8192: uma resposta é cortada aí.
 - Do MCP usa só *tools* (não *resources*, *prompts* nem *sampling*).
 - O texto usa uma fonte (Roboto) com os caracteres latinos e símbolos comuns; caracteres fora desse conjunto (CJK,
   emoji) não aparecem. Do markdown, os blocos de código e os títulos têm aspeto próprio e o negrito perde os `**`; o
   resto aparece como texto.
 - Em Windows a escala da interface é 1:1 com os píxeis do ecrã.
+- Arrastar um ficheiro para dentro da janela só funciona em Windows: o backend X11 da zen_platform ainda não fala
+  XDND. Em Linux usa o botão **Attach** ou `/attach <caminho>`.

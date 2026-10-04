@@ -30,6 +30,22 @@ struct ChatImage
     std::uint64_t texture = 0; // made by the window on first draw
 };
 
+// An image the user brings into the conversation: the file's own bytes go to the model, the decoded pixels to the
+// window. `preview` is shared with the entry the message makes.
+struct ChatAttachment
+{
+    std::string name;
+    std::string mimeType;
+    std::vector<std::uint8_t> bytes;
+    std::shared_ptr<ChatImage> preview;
+};
+
+// Reads an image file. False with `error` set when it is missing, unreadable, too big or not an image we decode.
+bool loadAttachment(const std::filesystem::path& path, ChatAttachment& out, std::string& error);
+// Same, from PNG bytes already in memory (the clipboard).
+bool loadAttachmentFromPng(std::vector<std::uint8_t> bytes, const std::string& name, ChatAttachment& out,
+                           std::string& error);
+
 struct ChatEntry
 {
     enum class Kind
@@ -66,6 +82,11 @@ public:
     {
         return mConfig;
     }
+    // The providers Settings offers, from `providers.json`; never empty.
+    const ProviderCatalog& catalog() const
+    {
+        return mCatalog;
+    }
     const std::filesystem::path& configPath() const
     {
         return mConfigPath;
@@ -76,7 +97,9 @@ public:
     void connect();
     // A line from the window itself (a failed save, a bad start), shown in the conversation.
     void notify(ChatEntry::Kind kind, std::string text);
-    void send(const std::string& text);
+    // `attachments` ride with the message; they need a profile that sees images, and `text` may be empty when they
+    // are given. False when nothing was sent, so the caller can keep what it typed.
+    bool send(const std::string& text, const std::vector<ChatAttachment>& attachments = {});
     void stop();
     void newConversation();
     bool busy() const;
@@ -139,6 +162,8 @@ private:
     AgentConfig agentConfig(const Config& config) const;
     bool confirm(const std::string& name, const Json& arguments);
     void releaseImages();
+    // The user's own line in the conversation, with whatever images came with it.
+    void notifyUser(const std::string& text, const std::vector<ChatAttachment>& attachments);
 
     void onStep(int step, int maxSteps) override;
     void onTextDelta(const std::string& text) override;
@@ -149,6 +174,7 @@ private:
 
     std::filesystem::path mConfigPath;
     Config mConfig;
+    ProviderCatalog mCatalog;
     SecretStore mSecrets;
 
     // Window thread.

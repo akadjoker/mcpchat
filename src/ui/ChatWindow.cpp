@@ -1,9 +1,12 @@
 #include "ui/ChatWindow.h"
 
 #include "render/GlBackend.h"
+#include "ui/ChatCommands.h"
 #include "ui/TextWrap.h"
 #include "util/Paths.h"
 #include "util/Strings.h"
+
+#include <platform.h>
 
 #include <algorithm>
 #include <cmath>
@@ -124,8 +127,11 @@ void ChatWindow::draw()
 
         const float statusTop = contentHeight - statusHeight;
         mUi.drawText(view(mSession.status()), ig::Vec2(0.0f, statusTop), kDim);
-        static const std::string hint = "Ctrl+Enter sends";
-        mUi.drawText(view(hint), ig::Vec2(contentWidth - mUi.textWidth(view(hint)), statusTop), kDim);
+        // The hint gives way to what is waiting to be sent.
+        const std::string hint = mAttachment ? "Attached: " + mAttachment->name + "  (/detach removes it)"
+                                             : std::string("Ctrl+Enter sends");
+        mUi.drawText(view(hint), ig::Vec2(contentWidth - mUi.textWidth(view(hint)), statusTop),
+                     mAttachment ? kHeading : kDim);
         mUi.endWindow();
     }
     mWheel = 0.0f;
@@ -162,7 +168,10 @@ void ChatWindow::drawTopBar(float width)
         mLayouts.clear();
         mScroll = 0.0f;
         mStick = true;
+        mAttachment.reset();
     }
+    if (rightButton("Attach") && !busy)
+        chooseAttachment();
     if (rightButton("Reconnect") && !busy)
         mSession.connect();
 
@@ -581,11 +590,119 @@ void ChatWindow::sendInput()
     if (mSettings.isOpen() || mConfirmOpen || mSession.busy())
         return;
     const std::string text(mInput.data(), mInput.size());
-    if (trim(text).empty())
+    if (handleCommand(text))
+    {
+        mInput.clear();
         return;
-    mSession.send(text);
+    }
+    if (trim(text).empty() && !mAttachment)
+        return;
+    std::vector<ChatAttachment> attachments;
+    if (mAttachment)
+        attachments.push_back(std::move(*mAttachment));
+    // A refused message keeps both what was typed and the image, so nothing has to be picked again.
+    if (!mSession.send(text, attachments))
+    {
+        if (!attachments.empty())
+            mAttachment = std::move(attachments.front());
+        return;
+    }
+    mAttachment.reset();
     mInput.clear();
     mStick = true;
+}
+
+bool ChatWindow::handleCommand(const std::string& text)
+{
+    const ChatCommand command = parseChatCommand(text);
+    switch (command.kind)
+    {
+    case ChatCommand::Kind::None:
+        return false;
+    case ChatCommand::Kind::Detach:
+        if (!mAttachment)
+            mSession.notify(ChatEntry::Kind::Notice, "No image is attached.");
+        else
+        {
+            mSession.notify(ChatEntry::Kind::Notice, "Detached " + mAttachment->name + ".");
+            mAttachment.reset();
+        }
+        return true;
+    case ChatCommand::Kind::Usage:
+        mSession.notify(ChatEntry::Kind::Notice, "Usage: /attach <image path>, or use the Attach button.");
+        return true;
+    case ChatCommand::Kind::BadPath:
+        mSession.notify(ChatEntry::Kind::Error, command.error);
+        return true;
+    case ChatCommand::Kind::Attach:
+        break;
+    }
+    attach(command.path);
+    // A question pasted together with the command goes out with the image, so it is one step and not two.
+    if (mAttachment && !command.text.empty())
+    {
+        mInput = ig::String(command.text.data(), command.text.size());
+        sendInput();
+    }
+    return true;
+}
+
+void ChatWindow::attach(const std::string& path)
+{
+    ChatAttachment attachment;
+    std::string error;
+    if (!loadAttachment(path, attachment, error))
+    {
+        mSession.notify(ChatEntry::Kind::Error, "Could not attach " + path + ": " + error + ".");
+        return;
+    }
+    keepAttachment(std::move(attachment));
+}
+
+void ChatWindow::keepAttachment(ChatAttachment attachment)
+{
+    const int width = attachment.preview->width;
+    const int height = attachment.preview->height;
+    mSession.notify(ChatEntry::Kind::Notice,
+                    "Attached " + attachment.name + " (" + std::to_string(width) + "x" + std::to_string(height) +
+                        "). Write the message and send; /detach removes it.");
+    mAttachment = std::move(attachment);
+}
+
+bool ChatWindow::attachFromClipboard()
+{
+    if (clipboard_get()[0] != '\0' || !clipboard_has_data(CLIPBOARD_PNG))
+        return false;
+    std::size_t size = 0;
+    void* data = clipboard_get_data(CLIPBOARD_PNG, &size);
+    if (!data)
+        return true; // an image is there but could not be read; the paste has nothing to do anyway
+    const auto* begin = static_cast<const std::uint8_t*>(data);
+    std::vector<std::uint8_t> png(begin, begin + size);
+    fs_free(data);
+
+    ChatAttachment attachment;
+    std::string error;
+    if (!loadAttachmentFromPng(std::move(png), "clipboard.png", attachment, error))
+        mSession.notify(ChatEntry::Kind::Error, "Could not attach the clipboard image: " + error + ".");
+    else
+        keepAttachment(std::move(attachment));
+    return true;
+}
+
+void ChatWindow::chooseAttachment()
+{
+    char path[4096] = {};
+    static const FileFilter filters[] = {{"Images", "*.png;*.jpg;*.jpeg;*.gif;*.bmp"}};
+    if (!dialog_open_file(mBackend.window(), "Attach an image", nullptr, filters, 1, path, sizeof path))
+    {
+        const char* why = platform_get_error();
+        if (why && why[0])
+            mSession.notify(ChatEntry::Kind::Error,
+                            std::string("Could not show the file dialog: ") + why + ". Use /attach <path> instead.");
+        return;
+    }
+    attach(path);
 }
 
 void ChatWindow::drawConfirmation()

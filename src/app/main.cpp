@@ -178,6 +178,9 @@ void translate(const Event& event, PlatformWindow* window, ig::Context& ui, mcpc
             chat.submit();
             break;
         }
+        // An image on the clipboard is attached instead of pasted; with text on it, iGUI's own paste has it.
+        if (key == ig::KeyCode::V && control && !shift && chat.attachFromClipboard())
+            break;
         ui.pushEvent(ig::Event::keyDown(key, control, shift));
         break;
     }

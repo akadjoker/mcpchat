@@ -29,12 +29,24 @@ struct ServerConfig
     std::vector<std::string> problems() const;
 };
 
-// An LLM endpoint that speaks the OpenAI chat-completions protocol (Ollama, LM Studio, vLLM, OpenAI, DeepSeek...).
+// An LLM endpoint that speaks the OpenAI chat-completions protocol (Ollama, LM Studio, vLLM, OpenAI, DeepSeek...),
+// or the Anthropic Messages API (Claude).
+enum class LlmApi
+{
+    OpenAi,
+    Anthropic
+};
+
+const char* toString(LlmApi api);
+bool parseLlmApi(const std::string& text, LlmApi& out);
+
 struct Profile
 {
     std::string name;
     std::string baseUrl;
     std::string model;
+    // Which protocol the endpoint speaks; the two are not interchangeable.
+    LlmApi api = LlmApi::OpenAi;
     // Environment variable with the key, never the key itself.
     std::string apiKeyEnv;
     // The model accepts images; stated, not guessed.
@@ -84,6 +96,38 @@ bool saveConfig(const std::filesystem::path& path, const Config& config, std::st
 
 Json toJson(const Config& config);
 bool fromJson(const Json& data, Config& out, std::string& error);
+
+// A provider worth offering in Settings, with the models it serves: the model names change with the season, so they
+// are data in a file of their own rather than something the program has to know.
+struct ProviderPreset
+{
+    std::string name;
+    LlmApi api = LlmApi::OpenAi;
+    std::string baseUrl;
+    std::string apiKeyEnv;
+    std::vector<std::string> models;
+};
+
+struct ProviderCatalog
+{
+    std::vector<ProviderPreset> providers;
+
+    // The preset a profile looks like it came from, matched on the base URL; null when it was written by hand.
+    const ProviderPreset* match(const Profile& profile) const;
+
+    static ProviderCatalog example();
+};
+
+// Points a profile at a known provider: its protocol, URL and key variable. A model it does not serve would only
+// fail later, so it moves to the first of the preset's; a profile with nothing to copy keeps what it has.
+void applyPreset(const ProviderPreset& preset, Profile& profile);
+
+std::filesystem::path defaultCatalogPath();
+
+// Always fills `out`: the file when it parses, the built-in example otherwise, with `error` saying what went wrong. A
+// missing file gets the example written next to the configuration.
+void loadCatalog(const std::filesystem::path& path, ProviderCatalog& out, std::string& error);
+bool saveCatalog(const std::filesystem::path& path, const ProviderCatalog& catalog, std::string& error);
 
 } // namespace mcpchat
 

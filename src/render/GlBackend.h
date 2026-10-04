@@ -30,6 +30,11 @@ public:
         return mFontAtlas;
     }
 
+    PlatformWindow* window() const
+    {
+        return mWindow;
+    }
+
     ig::TextMetrics measureText(ig::FontId font, ig::StringView text, float logicalSize, float dpiScale) override;
     bool render(const ig::DrawData& data) override;
     ig::String clipboardText() override;

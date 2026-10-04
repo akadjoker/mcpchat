@@ -7,6 +7,7 @@
 #include <igui/Gui.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,9 @@ public:
     void wheel(float steps);
     // Ctrl+Enter.
     void submit();
+    // Ctrl+V with an image and no text on the clipboard: keeps it for the next message. False when the clipboard
+    // holds text (iGUI's own paste then has it) or no image, so the key is left alone.
+    bool attachFromClipboard();
     // Between ui.beginFrame() and ui.endFrame().
     void draw();
 
@@ -83,6 +87,13 @@ private:
     void uploadImages(ChatEntry& entry);
 
     void sendInput();
+    // "/attach <path>" and "/detach"; true when the line was one of them and must not be sent.
+    bool handleCommand(const std::string& text);
+    // Opens the file dialog and keeps the chosen image for the next message.
+    void chooseAttachment();
+    void attach(const std::string& path);
+    // Tells the user and holds on to it for the next message.
+    void keepAttachment(ChatAttachment attachment);
     void saveConversation();
     void chooseProfile(int index);
     void copy(const std::string& text);
@@ -98,6 +109,8 @@ private:
 
     ig::String mInput;
     bool mSubmit = false;
+    // The image waiting to go with the next message, if any.
+    std::optional<ChatAttachment> mAttachment;
 
     float mScroll = 0.0f;
     float mWheel = 0.0f;

@@ -21,6 +21,11 @@ bool startsWith(std::string_view text, std::string_view prefix)
     return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
 }
 
+bool endsWith(std::string_view text, std::string_view suffix)
+{
+    return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 std::string toLower(std::string_view text)
 {
     std::string out(text);

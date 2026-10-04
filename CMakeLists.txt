@@ -33,10 +33,12 @@ add_library(mcpchat_core STATIC
     src/mcp/ServerHub.cpp
     src/llm/Wire.cpp
     src/llm/OpenAiProvider.cpp
+    src/llm/AnthropicProvider.cpp
     src/agent/Tools.cpp
     src/agent/History.cpp
     src/agent/Agent.cpp
     src/config/Config.cpp
+    src/ui/ChatCommands.cpp
     src/ui/TextWrap.cpp
 )
 if(WIN32)

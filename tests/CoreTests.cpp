@@ -3,12 +3,15 @@
 #include "agent/History.h"
 #include "agent/Tools.h"
 #include "config/Config.h"
+#include "llm/AnthropicProvider.h"
 #include "llm/Wire.h"
 #include "mcp/ServerHub.h"
 #include "net/Sse.h"
 #include "net/Url.h"
+#include "ui/ChatCommands.h"
 #include "ui/TextWrap.h"
 #include "util/Base64.h"
+#include "util/Paths.h"
 #include "util/Strings.h"
 
 #include <filesystem>
@@ -108,8 +111,11 @@ TEST(configRoundTripAndRefusals)
     Config read;
     CHECK(loadConfig(path, read, error));
     CHECK(read.servers.size() == 2 && read.servers[1].args.size() == 2 && read.servers[1].env.at("KEY") == "value");
-    CHECK(read.profiles.size() == 3 && read.profiles[0].temperature && *read.profiles[0].temperature == 0.25);
+    CHECK(read.profiles.size() == 5 && read.profiles[0].temperature && *read.profiles[0].temperature == 0.25);
     CHECK(!read.profiles[1].temperature);
+    // DeepSeek speaks the OpenAI protocol; Claude does not.
+    CHECK(read.profiles[3].name == "deepseek" && read.profiles[3].api == LlmApi::OpenAi);
+    CHECK(read.profiles[4].name == "claude" && read.profiles[4].api == LlmApi::Anthropic);
     CHECK(read.confirm == ConfirmPolicy::Writes && read.profile()->name == "ollama");
     CHECK(read.problems().empty());
 
@@ -118,6 +124,8 @@ TEST(configRoundTripAndRefusals)
           error.find("unknown field(s) colour") != std::string::npos);
     CHECK(!fromJson(Json::parse(R"({"profiles":[{"name":"x","vision":"yes"}]})"), bad, error) &&
           error.find("'vision' must be true or false") != std::string::npos);
+    CHECK(!fromJson(Json::parse(R"({"profiles":[{"name":"x","api":"gemini"}]})"), bad, error) &&
+          error.find("'api' must be \"openai\" or \"anthropic\"") != std::string::npos);
     CHECK(!fromJson(Json::parse(R"({"confirm":"always"})"), bad, error));
 
     Config twins = Config::example();
@@ -188,6 +196,176 @@ TEST(wireMessagesCarryImagesAfterToolRuns)
     CHECK(toWireMessages(messages, false).size() == 5);
 }
 
+TEST(wireMessagesCarryImagesTheUserAttached)
+{
+    const Json parts = Json::array({
+        {{"type", "text"}, {"text", "make a mesh like this"}},
+        {{"type", "image_url"}, {"image_url", {{"url", "data:image/png;base64,AA"}}}},
+    });
+    const std::vector<Json> messages = {{{"role", "user"}, {"content", parts}}};
+
+    const Json seeing = toWireMessages(messages, true);
+    CHECK(seeing.size() == 1 && seeing[0]["content"].is_array());
+    CHECK(seeing[0]["content"][1]["image_url"]["url"] == "data:image/png;base64,AA");
+
+    // A model that cannot see is sent the words alone, never the image.
+    const Json blind = toWireMessages(messages, false);
+    CHECK(blind.size() == 1 && blind[0]["content"].is_string());
+    CHECK(blind[0]["content"] == "make a mesh like this");
+}
+
+TEST(anthropicRequestMapsTheConversation)
+{
+    const Json tools = Json::array({Json{{"type", "function"},
+                                         {"function", {{"name", "add"},
+                                                       {"description", "Adds."},
+                                                       {"parameters", {{"type", "object"}}}}}}});
+    const Json assistant = Json::parse(R"({"role":"assistant","content":"",
+        "tool_calls":[{"id":"c1","type":"function","function":{"name":"add","arguments":"{\"a\":2}"}}]})");
+    const Json userParts = Json::array({
+        {{"type", "text"}, {"text", "make a mesh like this"}},
+        {{"type", "image_url"}, {"image_url", {{"url", "data:image/png;base64,AA"}}}},
+    });
+    const std::vector<Json> messages = {
+        {{"role", "system"}, {"content", "be brief"}},
+        {{"role", "user"}, {"content", userParts}},
+        assistant,
+        {{"role", "tool"}, {"tool_call_id", "c1"}, {"content", "4"},
+         {"image", {{"mimeType", "image/png"}, {"data", "BB"}}}},
+        {{"role", "tool"}, {"tool_call_id", "c2"}, {"content", "5"}},
+        {{"role", "user"}, {"content", "and now"}},
+    };
+    const Json body = toAnthropicRequest(messages, tools, true);
+    CHECK(body["system"] == "be brief");
+    const Json& conversation = body["messages"];
+    CHECK(conversation.size() == 4);
+    CHECK(conversation[0]["role"] == "user" && conversation[0]["content"].size() == 2);
+    CHECK(conversation[0]["content"][0]["text"] == "make a mesh like this");
+    CHECK(conversation[0]["content"][1]["source"]["media_type"] == "image/png");
+    CHECK(conversation[0]["content"][1]["source"]["data"] == "AA");
+    // No empty text block: the tool call is the whole turn.
+    CHECK(conversation[1]["role"] == "assistant" && conversation[1]["content"].size() == 1);
+    CHECK(conversation[1]["content"][0]["type"] == "tool_use" && conversation[1]["content"][0]["input"]["a"] == 2);
+    // Both results of one turn land in a single user message, screenshot inside the first.
+    CHECK(conversation[2]["role"] == "user" && conversation[2]["content"].size() == 2);
+    CHECK(conversation[2]["content"][0]["type"] == "tool_result");
+    CHECK(conversation[2]["content"][0]["content"].size() == 2);
+    CHECK(conversation[2]["content"][0]["content"][1]["type"] == "image");
+    CHECK(conversation[2]["content"][1]["tool_use_id"] == "c2");
+    CHECK(conversation[3]["content"][0]["text"] == "and now");
+    CHECK(body["tools"][0]["name"] == "add" && body["tools"][0]["input_schema"]["type"] == "object");
+    CHECK(!body["tools"][0].contains("function"));
+
+    // A model that does not see gets the words without the images.
+    const Json blind = toAnthropicRequest(messages, tools, false);
+    CHECK(blind["messages"][0]["content"].size() == 1);
+    CHECK(blind["messages"][2]["content"][0]["content"].size() == 1);
+
+    // A turn with nothing in it would be an empty block, which the API refuses.
+    const Json skipped = toAnthropicRequest(
+        {{{"role", "user"}, {"content", "hi"}}, {{"role", "assistant"}, {"content", ""}}}, Json::array(), true);
+    CHECK(skipped["messages"].size() == 1 && !skipped.contains("tools"));
+}
+
+TEST(providerCatalogRoundTripAndMatching)
+{
+    const ProviderCatalog catalog = ProviderCatalog::example();
+    CHECK(catalog.providers.size() == 5);
+    Profile profile;
+    profile.baseUrl = "https://api.deepseek.com/v1/";
+    const ProviderPreset* found = catalog.match(profile);
+    CHECK(found && found->name == "DeepSeek" && found->models.size() == 2);
+    // The protocol is part of the identity: the same host over the Messages API is another provider.
+    profile.api = LlmApi::Anthropic;
+    CHECK(!catalog.match(profile));
+    profile.api = LlmApi::OpenAi;
+    profile.baseUrl = "http://127.0.0.1:9999/v1";
+    CHECK(!catalog.match(profile));
+
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "mcpchat_test" / "providers.json";
+    std::error_code code;
+    std::filesystem::remove(path, code);
+    std::string error;
+    ProviderCatalog read;
+    loadCatalog(path, read, error);
+    CHECK(error.empty() && read.providers.size() == 5 && std::filesystem::exists(path));
+    CHECK(saveCatalog(path, read, error));
+
+    // A file that does not parse, or holds something unknown, leaves the built-in list in place and says why.
+    CHECK(writeTextFileAtomic(path, "{ not json", &error));
+    loadCatalog(path, read, error);
+    CHECK(read.providers.size() == 5 && error.find("not valid JSON") != std::string::npos);
+    CHECK(writeTextFileAtomic(path, R"({"providers":[{"name":"x","colour":1}]})", &error));
+    loadCatalog(path, read, error);
+    CHECK(read.providers.size() == 5 && error.find("unknown field(s) colour") != std::string::npos);
+    CHECK(writeTextFileAtomic(path, R"({"providers":[{"name":"x","api":"gemini"}]})", &error));
+    loadCatalog(path, read, error);
+    CHECK(error.find("'api' must be \"openai\" or \"anthropic\"") != std::string::npos);
+
+    // A catalog of one's own is read as written.
+    CHECK(writeTextFileAtomic(
+        path, R"({"version":1,"providers":[{"name":"Mine","api":"anthropic","base_url":"http://h/v1",
+                  "api_key_env":"MINE_KEY","models":["m1","m2"]}]})",
+        &error));
+    loadCatalog(path, read, error);
+    CHECK(error.empty() && read.providers.size() == 1);
+    CHECK(read.providers[0].api == LlmApi::Anthropic && read.providers[0].apiKeyEnv == "MINE_KEY");
+    CHECK(read.providers[0].models.size() == 2);
+    CHECK(saveCatalog(path, read, error));
+
+    // Picking a provider takes its protocol, address, key variable and, when the model is not one of its own, a
+    // model it serves; a profile with nothing to copy keeps what it has.
+    Profile target;
+    target.model = "something-else";
+    applyPreset(read.providers[0], target);
+    CHECK(target.api == LlmApi::Anthropic && target.baseUrl == "http://h/v1");
+    CHECK(target.apiKeyEnv == "MINE_KEY" && target.model == "m1");
+    target.model = "m2";
+    applyPreset(read.providers[0], target);
+    CHECK(target.model == "m2");
+    ProviderPreset bare;
+    bare.name = "Local";
+    bare.baseUrl = "http://localhost:9/v1";
+    applyPreset(bare, target);
+    CHECK(target.apiKeyEnv == "MINE_KEY" && target.model == "m2" && target.baseUrl == "http://localhost:9/v1");
+}
+
+TEST(chatCommandParsing)
+{
+    // An ordinary message is not a command.
+    CHECK(parseChatCommand("hello there").kind == ChatCommand::Kind::None);
+    CHECK(parseChatCommand("").kind == ChatCommand::Kind::None);
+    // "/attachment" only looks like the command: it has to be a word of its own.
+    CHECK(parseChatCommand("/attachment /a/b.png").kind == ChatCommand::Kind::None);
+    CHECK(parseChatCommand("/detachx").kind == ChatCommand::Kind::None);
+
+    ChatCommand attach = parseChatCommand("/attach /home/eu/fachada.png");
+    CHECK(attach.kind == ChatCommand::Kind::Attach);
+    CHECK(attach.path == "/home/eu/fachada.png" && attach.text.empty());
+
+    // The path ends at a line break too, so a command and a question pasted together still work. This is what bit
+    // us: splitting only on spaces and tabs left the path as "/a/b.png\n\nLook", and the extension check refused it.
+    attach = parseChatCommand("/attach /home/eu/fachada.png\n\nLook at this image and build it");
+    CHECK(attach.kind == ChatCommand::Kind::Attach);
+    CHECK(attach.path == "/home/eu/fachada.png");
+    CHECK(attach.text == "Look at this image and build it");
+
+    // Same with the path on its own line.
+    attach = parseChatCommand("/attach\n/home/eu/fachada.png");
+    CHECK(attach.path == "/home/eu/fachada.png" && attach.text.empty());
+
+    // A quoted path may hold spaces; whatever follows it is the message.
+    attach = parseChatCommand("/attach \"/home/eu/a casa.png\" constroi isto");
+    CHECK(attach.path == "/home/eu/a casa.png" && attach.text == "constroi isto");
+
+    CHECK(parseChatCommand("/attach").kind == ChatCommand::Kind::Usage);
+    CHECK(parseChatCommand("/attach   ").kind == ChatCommand::Kind::Usage);
+    const ChatCommand unclosed = parseChatCommand("/attach \"/home/eu/a casa.png");
+    CHECK(unclosed.kind == ChatCommand::Kind::BadPath && !unclosed.error.empty());
+    CHECK(parseChatCommand("/detach").kind == ChatCommand::Kind::Detach);
+    CHECK(parseChatCommand("  /detach  ").kind == ChatCommand::Kind::Detach);
+}
+
 TEST(replyBuilderJoinsStreamFragments)
 {
     ReplyBuilder builder;
@@ -242,4 +420,37 @@ TEST(historyPruning)
     limits.maxChars = 10;
     pruneHistory(messages, limits);
     CHECK(messages.size() == 1 && messages[0]["content"] == "second");
+}
+
+TEST(historyPruningDropsTheImagesTheUserAttached)
+{
+    const Json parts = Json::array({
+        {{"type", "text"}, {"text", "like this"}},
+        {{"type", "image_url"}, {"image_url", {{"url", "data:image/png;base64,AA"}}}},
+    });
+    std::vector<Json> messages;
+    messages.push_back({{"role", "user"}, {"content", "first"}});
+    for (int i = 0; i < 3; ++i)
+        messages.push_back({{"role", "user"}, {"content", parts}});
+    messages.push_back({{"role", "user"}, {"content", "last"}});
+    PruneLimits limits;
+    limits.keepImages = 2;
+    limits.maxChars = 1000000;
+    pruneHistory(messages, limits);
+
+    // The oldest attachment is gone, the words and the note are left behind.
+    CHECK(messages[1]["content"].is_string());
+    CHECK(messages[1]["content"].get<std::string>() ==
+          "like this\n[attached image no longer in history]");
+    CHECK(messages[2]["content"].is_array() && messages[3]["content"].is_array());
+    CHECK(messages[2]["content"][1]["type"] == "image_url");
+
+    // A screenshot and an attachment share the budget, oldest first.
+    std::vector<Json> mixed;
+    mixed.push_back({{"role", "user"}, {"content", parts}});
+    mixed.push_back({{"role", "tool"}, {"tool_call_id", "1"}, {"content", "a"},
+                     {"image", {{"mimeType", "image/png"}, {"data", "AA"}}}});
+    limits.keepImages = 1;
+    pruneHistory(mixed, limits);
+    CHECK(mixed[0]["content"].is_string() && mixed[1].contains("image"));
 }

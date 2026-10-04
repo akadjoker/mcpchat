@@ -21,6 +21,16 @@ Json assistantToWire(const Json& message)
         wire["tool_calls"] = message["tool_calls"];
     return wire;
 }
+
+// The words of a message built from parts, for a model that must not be sent the images.
+std::string textOfParts(const Json& content)
+{
+    std::string text;
+    for (const Json& part : content)
+        if (part.value("type", "") == "text")
+            text += part.value("text", std::string());
+    return text;
+}
 } // namespace
 
 Json toWireMessages(const std::vector<Json>& messages, bool vision)
@@ -59,6 +69,8 @@ Json toWireMessages(const std::vector<Json>& messages, bool vision)
             if (vision && message.contains("image") && message["image"].is_object())
                 pendingImages.push_back(message["image"]);
         }
+        else if (!vision && message.contains("content") && message["content"].is_array())
+            wire.push_back({{"role", role}, {"content", textOfParts(message["content"])}});
         else
             wire.push_back({{"role", role}, {"content", message.contains("content") ? message["content"] : Json("")}});
     }
