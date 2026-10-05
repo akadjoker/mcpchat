@@ -1,13 +1,11 @@
 # mcpchat
 
-*[Português](README.pt.md) · English*
-
 A small native chat client that connects a language model to **[MCP](https://modelcontextprotocol.io) servers**.
 You type what you want, the model calls the servers' tools, you see every call, its result and any image it returns,
 and the model answers.
 
 Written in C++17: a [zen_platform](https://github.com/akadjoker/zen_plataform) window with OpenGL 3.3 and an
-[iGUI](https://github.com/akadjoker/iGUI) interface. One executable for Linux and Windows — no Electron, no browser.
+[iGUI](https://github.com/akadjoker/iGUI) interface. One executable for Linux and Windows.
 
 ![mcpchat connected to CocoShape](docs/screenshot.png)
 

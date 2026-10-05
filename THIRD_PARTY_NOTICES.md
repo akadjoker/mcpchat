@@ -9,6 +9,7 @@ Bundled in `third_party/`:
 
 Fetched by CMake at configure time (see `cmake/Dependencies.cmake`):
 
-- [zen_platform](https://github.com/akadjoker/zen_plataform) — window and input
-- [iGUI](https://github.com/akadjoker/iGUI) — immediate-mode UI, which embeds the Roboto font (Apache License 2.0)
+- [zen_platform](https://github.com/akadjoker/zen_plataform) — window and input (MIT)
+- [iGUI](https://github.com/akadjoker/iGUI) — immediate-mode UI (MIT), which embeds the Roboto font (Apache License 2.0)
+- [containers](https://github.com/akadjoker/containers) — data structures used by iGUI (MIT)
 - libcurl (Linux, system library) — curl license
