@@ -9,6 +9,8 @@ Written in C++17: a [zen_platform](https://github.com/akadjoker/zen_plataform) w
 
 ![mcpchat connected to CocoShape](docs/screenshot.png)
 
+![A model animating a stick-figure fight through MCP](docs/luta-stick.gif)
+
 It is not tied to any project: any MCP server will do (the [CocoShape](https://github.com/akadjoker/cocoshape) 3D
 editor is one, and a good demo: ask for "a cube that spins and rises over 2 seconds" and watch the animation appear).
 It works with any LLM that speaks the OpenAI chat API (Ollama, LM Studio, vLLM, llama.cpp server, DeepSeek...), OpenAI's
