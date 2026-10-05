@@ -4,6 +4,7 @@
 
 #include "agent/Agent.h"
 #include "llm/AnthropicProvider.h"
+#include "llm/ResponsesProvider.h"
 #include "llm/OpenAiProvider.h"
 #include "mcp/HttpTransport.h"
 #include "mcp/ServerHub.h"
@@ -306,6 +307,102 @@ TEST(anthropicProviderReadsAWholeMessageAndReportsErrors)
         invalid = true;
     }
     CHECK(invalid);
+}
+
+TEST(responsesProviderStreamsTextAndToolCalls)
+{
+    const auto event = [](const std::string& type, Json payload)
+    {
+        payload["type"] = type;
+        return "event: " + type + "\ndata: " + dump(payload) + "\n\n";
+    };
+    LoopbackServer::Reply reply;
+    reply.headers.push_back({"Content-Type", "text/event-stream"});
+    reply.chunks = {
+        event("response.created", {{"response", {{"status", "in_progress"}}}}),
+        event("response.output_text.delta", {{"delta", "The sum "}}),
+        event("response.output_text.delta", {{"delta", "is 42."}}),
+        event("response.function_call_arguments.delta", {{"output_index", 1}, {"delta", R"({"a":2,)"}}),
+        event("response.output_item.done",
+              {{"item", {{"type", "function_call"},
+                         {"call_id", "call_1"},
+                         {"name", "add"},
+                         {"arguments", R"({"a":2,"b":40})"}}}}),
+        event("response.completed",
+              {{"response", {{"status", "completed"}, {"usage", {{"input_tokens", 7}, {"output_tokens", 15}}}}}}),
+    };
+    LoopbackServer server([&](const LoopbackServer::Request&) { return reply; });
+    ResponsesProvider::Settings settings;
+    settings.baseUrl = server.url("/v1/");
+    settings.model = "gpt-x";
+    settings.apiKey = "key";
+    settings.reasoningEffort = "medium";
+    ResponsesProvider provider(settings);
+    const Json tools = Json::array({{{"type", "function"},
+                                     {"function", {{"name", "add"}, {"description", "adds"}, {"parameters", Json::object()}}}}});
+    std::string streamed;
+    const AssistantMessage answer = provider.complete(
+        {{{"role", "system"}, {"content", "be brief"}},
+         {{"role", "user"}, {"content", "hi"}},
+         {{"role", "assistant"},
+          {"content", ""},
+          {"tool_calls", Json::array({{{"id", "c0"}, {"type", "function"}, {"function", {{"name", "add"}, {"arguments", "{}"}}}}})}},
+         {{"role", "tool"}, {"tool_call_id", "c0"}, {"content", "0"}}},
+        tools, [&](const std::string& piece) { streamed += piece + "|"; }, nullptr);
+    CHECK(answer.content == "The sum is 42." && streamed == "The sum |is 42.|");
+    CHECK(answer.toolCalls.size() == 1 && answer.toolCalls[0].id == "call_1" && answer.toolCalls[0].name == "add");
+    CHECK(answer.toolCalls[0].arguments && (*answer.toolCalls[0].arguments)["b"] == 40);
+    CHECK(answer.finishReason == "tool_calls");
+    CHECK(answer.usage && answer.usage->promptTokens == 7 && answer.usage->completionTokens == 15);
+
+    const LoopbackServer::Request request = server.requests().at(0);
+    CHECK(request.path == "/v1/responses" && request.headers.at("authorization") == "Bearer key");
+    const Json body = Json::parse(request.body);
+    CHECK(body["model"] == "gpt-x" && body["stream"] == true && body["store"] == false);
+    CHECK(body["instructions"] == "be brief" && body["reasoning"]["effort"] == "medium");
+    CHECK(body["tools"][0]["name"] == "add" && body["tools"][0]["type"] == "function");
+    CHECK(body["input"].size() == 3 && body["input"][0]["content"][0]["type"] == "input_text");
+    CHECK(body["input"][1]["type"] == "function_call" && body["input"][1]["call_id"] == "c0");
+    CHECK(body["input"][2]["type"] == "function_call_output" && body["input"][2]["output"] == "0");
+}
+
+TEST(responsesProviderReadsAWholeResponseAndReportsErrors)
+{
+    LoopbackServer::Reply whole;
+    whole.headers.push_back({"Content-Type", "application/json"});
+    whole.chunks = {dump({{"status", "completed"},
+                          {"output", Json::array({{{"type", "reasoning"}, {"summary", Json::array()}},
+                                                  {{"type", "message"},
+                                                   {"content", Json::array({{{"type", "output_text"}, {"text", "plain"}}})}}})},
+                          {"usage", {{"input_tokens", 3}, {"output_tokens", 1}}}})};
+    LoopbackServer::Reply refused;
+    refused.status = 400;
+    refused.headers.push_back({"Content-Type", "application/json"});
+    refused.chunks = {R"({"error":{"message":"Unsupported value"}})"};
+    std::vector<LoopbackServer::Reply> script = {whole, refused};
+    std::size_t next = 0;
+    LoopbackServer server([&](const LoopbackServer::Request&) { return script.at(next++); });
+    ResponsesProvider::Settings settings;
+    settings.baseUrl = server.url("/v1");
+    settings.model = "gpt-x";
+    settings.stream = false;
+    ResponsesProvider provider(settings);
+    std::string streamed;
+    const AssistantMessage answer = provider.complete({{{"role", "user"}, {"content", "hi"}}}, Json::array(),
+                                                      [&](const std::string& piece) { streamed += piece; }, nullptr);
+    CHECK(answer.content == "plain" && streamed == "plain" && answer.toolCalls.empty() && answer.finishReason == "stop");
+    CHECK(!Json::parse(server.requests().at(0).body).contains("reasoning"));
+
+    std::string message;
+    try
+    {
+        provider.complete({{{"role", "user"}, {"content", "hi"}}}, Json::array(), TextDelta(), nullptr);
+    }
+    catch (const LlmError& error)
+    {
+        message = error.what();
+    }
+    CHECK(message == "The LLM server answered HTTP 400: Unsupported value");
 }
 
 TEST(providerErrorsAndFallbacks)

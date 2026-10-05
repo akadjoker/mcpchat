@@ -323,12 +323,13 @@ void SettingsDialog::drawProfiles(ig::Context& ui, ChatSession& session, float t
         applyPreset(presets[static_cast<std::size_t>(provider)], profile);
     matched = session.catalog().match(profile);
 
-    static const ig::StringView apis[] = {"OpenAI-compatible", "Anthropic (Claude)"};
-    int api = profile.api == LlmApi::Anthropic ? 1 : 0;
+    static const ig::StringView apis[] = {"OpenAI-compatible", "OpenAI Responses", "Anthropic (Claude)"};
+    static const LlmApi apiValues[] = {LlmApi::OpenAi, LlmApi::OpenAiResponses, LlmApi::Anthropic};
+    int api = profile.api == LlmApi::Anthropic ? 2 : profile.api == LlmApi::OpenAiResponses ? 1 : 0;
     const ig::Rect apiRect = form.field("Protocol");
-    if (ui.comboBox("api", api, ig::Span<const ig::StringView>(apis, 2),
+    if (ui.comboBox("api", api, ig::Span<const ig::StringView>(apis, 3),
                     ig::Rect(apiRect.x, apiRect.y, std::min(apiRect.width, 300.0f), row)))
-        profile.api = api == 1 ? LlmApi::Anthropic : LlmApi::OpenAi;
+        profile.api = apiValues[api];
     editString(ui, "base_url", profile.baseUrl, form.field("Base URL"));
 
     // The models of the matched provider are offered, but any name can be typed. The model in use is always among

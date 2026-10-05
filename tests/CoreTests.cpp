@@ -116,6 +116,7 @@ TEST(configRoundTripAndRefusals)
     // DeepSeek speaks the OpenAI protocol; Claude does not.
     CHECK(read.profiles[3].name == "deepseek" && read.profiles[3].api == LlmApi::OpenAi);
     CHECK(read.profiles[4].name == "claude" && read.profiles[4].api == LlmApi::Anthropic);
+    CHECK(read.profiles[2].name == "openai" && read.profiles[2].api == LlmApi::OpenAiResponses);
     CHECK(read.confirm == ConfirmPolicy::Writes && read.profile()->name == "ollama");
     CHECK(read.problems().empty());
 
@@ -125,7 +126,7 @@ TEST(configRoundTripAndRefusals)
     CHECK(!fromJson(Json::parse(R"({"profiles":[{"name":"x","vision":"yes"}]})"), bad, error) &&
           error.find("'vision' must be true or false") != std::string::npos);
     CHECK(!fromJson(Json::parse(R"({"profiles":[{"name":"x","api":"gemini"}]})"), bad, error) &&
-          error.find("'api' must be \"openai\" or \"anthropic\"") != std::string::npos);
+          error.find("'api' must be \"openai\", \"openai-responses\" or \"anthropic\"") != std::string::npos);
     CHECK(!fromJson(Json::parse(R"({"confirm":"always"})"), bad, error));
 
     Config twins = Config::example();
@@ -323,7 +324,7 @@ TEST(providerCatalogRoundTripAndMatching)
     CHECK(read.providers.size() == 5 && error.find("unknown field(s) colour") != std::string::npos);
     CHECK(writeTextFileAtomic(path, R"({"providers":[{"name":"x","api":"gemini"}]})", &error));
     loadCatalog(path, read, error);
-    CHECK(error.find("'api' must be \"openai\" or \"anthropic\"") != std::string::npos);
+    CHECK(error.find("'api' must be \"openai\", \"openai-responses\" or \"anthropic\"") != std::string::npos);
 
     // A catalog of one's own is read as written.
     CHECK(writeTextFileAtomic(

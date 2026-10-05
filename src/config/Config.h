@@ -29,11 +29,12 @@ struct ServerConfig
     std::vector<std::string> problems() const;
 };
 
-// An LLM endpoint that speaks the OpenAI chat-completions protocol (Ollama, LM Studio, vLLM, OpenAI, DeepSeek...),
-// or the Anthropic Messages API (Claude).
+// An LLM endpoint that speaks the OpenAI chat-completions protocol (Ollama, LM Studio, vLLM, DeepSeek...), OpenAI's
+// own Responses API (the newer reasoning models need it for tools), or the Anthropic Messages API (Claude).
 enum class LlmApi
 {
     OpenAi,
+    OpenAiResponses,
     Anthropic
 };
 
@@ -55,6 +56,8 @@ struct Profile
     bool simplifySchema = false;
     bool stream = true;
     std::optional<double> temperature;
+    // How hard a reasoning model thinks ("low", "medium", "high"...), for the Responses API; empty is the model's own.
+    std::string reasoningEffort;
     int maxSteps = 40;
     double requestTimeout = 300.0;
     std::size_t contextChars = 120000;

@@ -218,6 +218,8 @@ const char* toString(LlmApi api)
     {
     case LlmApi::OpenAi:
         return "openai";
+    case LlmApi::OpenAiResponses:
+        return "openai-responses";
     case LlmApi::Anthropic:
         return "anthropic";
     }
@@ -226,7 +228,7 @@ const char* toString(LlmApi api)
 
 bool parseLlmApi(const std::string& text, LlmApi& out)
 {
-    for (const LlmApi api : {LlmApi::OpenAi, LlmApi::Anthropic})
+    for (const LlmApi api : {LlmApi::OpenAi, LlmApi::OpenAiResponses, LlmApi::Anthropic})
     {
         if (text == toString(api))
         {
@@ -298,6 +300,7 @@ Config Config::example()
     lmstudio.model = "local-model";
     Profile openai;
     openai.name = "openai";
+    openai.api = LlmApi::OpenAiResponses;
     openai.baseUrl = "https://api.openai.com/v1";
     openai.model = "gpt-4.1";
     openai.apiKeyEnv = "OPENAI_API_KEY";
@@ -380,7 +383,7 @@ bool fromJson(const Json& data, ProviderCatalog& out, std::string& error)
         read.texts("models", preset.models);
         if (!api.empty() && !parseLlmApi(api, preset.api))
         {
-            error = "providers[" + std::to_string(i) + "]: 'api' must be \"openai\" or \"anthropic\"";
+            error = "providers[" + std::to_string(i) + "]: 'api' must be \"openai\", \"openai-responses\" or \"anthropic\"";
             return false;
         }
         read.finish();
@@ -435,9 +438,10 @@ ProviderCatalog ProviderCatalog::example()
     deepseek.models = {"deepseek-flash", "deepseek-v4-pro"};
     ProviderPreset openai;
     openai.name = "OpenAI";
+    openai.api = LlmApi::OpenAiResponses;
     openai.baseUrl = "https://api.openai.com/v1";
     openai.apiKeyEnv = "OPENAI_API_KEY";
-    // The Sol and Luna models restrict tool calling over chat/completions, which this program needs.
+    // The Astra and Sol models only take function tools together with reasoning on /responses.
     openai.models = {"gpt-6-astra", "gpt-6-sol"};
     ProviderPreset ollama;
     ollama.name = "Ollama (local)";
@@ -518,6 +522,7 @@ Json toJson(const Config& config)
                             {"simplify_schema", item.simplifySchema},
                             {"stream", item.stream},
                             {"temperature", item.temperature ? Json(*item.temperature) : Json()},
+                            {"reasoning_effort", item.reasoningEffort},
                             {"max_steps", item.maxSteps},
                             {"request_timeout", item.requestTimeout},
                             {"context_chars", item.contextChars},
@@ -590,13 +595,14 @@ bool fromJson(const Json& data, Config& out, std::string& error)
         read.flag("simplify_schema", item.simplifySchema);
         read.flag("stream", item.stream);
         read.optionalNumber("temperature", item.temperature);
+        read.text("reasoning_effort", item.reasoningEffort);
         read.number("max_steps", item.maxSteps);
         read.number("request_timeout", item.requestTimeout);
         read.number("context_chars", item.contextChars);
         read.text("system_prompt", item.systemPrompt);
         if (!api.empty() && !parseLlmApi(api, item.api))
         {
-            error = "profiles[" + std::to_string(i) + "]: 'api' must be \"openai\" or \"anthropic\"";
+            error = "profiles[" + std::to_string(i) + "]: 'api' must be \"openai\", \"openai-responses\" or \"anthropic\"";
             return false;
         }
         read.finish();

@@ -1,6 +1,7 @@
 #include "ui/ChatSession.h"
 
 #include "llm/AnthropicProvider.h"
+#include "llm/ResponsesProvider.h"
 #include "llm/OpenAiProvider.h"
 #include "llm/Wire.h"
 #include "render/Image.h"
@@ -68,7 +69,7 @@ std::string writeTemporaryImage(const std::vector<std::uint8_t>& bytes)
     return file ? path.u8string() : std::string();
 }
 
-// The provider the profile asks for; both carry the same settings apart from their shape.
+// The provider the profile asks for; they carry the same settings apart from their shape.
 std::unique_ptr<LlmProvider> makeProvider(const Profile& profile, const std::string& apiKey)
 {
     if (profile.api == LlmApi::Anthropic)
@@ -82,6 +83,19 @@ std::unique_ptr<LlmProvider> makeProvider(const Profile& profile, const std::str
         settings.stream = profile.stream;
         settings.timeoutSeconds = profile.requestTimeout;
         return std::make_unique<AnthropicProvider>(settings);
+    }
+    if (profile.api == LlmApi::OpenAiResponses)
+    {
+        ResponsesProvider::Settings settings;
+        settings.baseUrl = profile.baseUrl;
+        settings.model = profile.model;
+        settings.apiKey = apiKey;
+        settings.vision = profile.vision;
+        settings.temperature = profile.temperature;
+        settings.reasoningEffort = profile.reasoningEffort;
+        settings.stream = profile.stream;
+        settings.timeoutSeconds = profile.requestTimeout;
+        return std::make_unique<ResponsesProvider>(settings);
     }
     OpenAiProvider::Settings settings;
     settings.baseUrl = profile.baseUrl;

@@ -6,6 +6,7 @@
 #include "agent/Agent.h"
 #include "config/Config.h"
 #include "llm/AnthropicProvider.h"
+#include "llm/ResponsesProvider.h"
 #include "llm/OpenAiProvider.h"
 #include "llm/Wire.h"
 #include "mcp/ServerHub.h"
@@ -155,6 +156,19 @@ int main(int argc, char** argv)
             settings.stream = profile->stream;
             settings.timeoutSeconds = profile->requestTimeout;
             provider = std::make_unique<AnthropicProvider>(settings);
+        }
+        else if (profile->api == LlmApi::OpenAiResponses)
+        {
+            ResponsesProvider::Settings settings;
+            settings.baseUrl = profile->baseUrl;
+            settings.model = profile->model;
+            settings.apiKey = key;
+            settings.vision = profile->vision;
+            settings.temperature = profile->temperature;
+            settings.reasoningEffort = profile->reasoningEffort;
+            settings.stream = profile->stream;
+            settings.timeoutSeconds = profile->requestTimeout;
+            provider = std::make_unique<ResponsesProvider>(settings);
         }
         else
         {

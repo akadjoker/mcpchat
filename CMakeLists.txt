@@ -34,6 +34,7 @@ add_library(mcpchat_core STATIC
     src/llm/Wire.cpp
     src/llm/OpenAiProvider.cpp
     src/llm/AnthropicProvider.cpp
+    src/llm/ResponsesProvider.cpp
     src/agent/Tools.cpp
     src/agent/History.cpp
     src/agent/Agent.cpp
